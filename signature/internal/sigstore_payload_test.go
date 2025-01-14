@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"bytes"
+	"crypto"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,7 +16,6 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 )
 
 // A short-hand way to get a JSON object field value or panic. No error handling done, we know
@@ -43,6 +44,8 @@ func TestNewUntrustedSigstorePayload(t *testing.T) {
 }
 
 func TestUntrustedSigstorePayloadMarshalJSON(t *testing.T) {
+	const testDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 	// Empty string values
 	s := NewUntrustedSigstorePayload("", "_")
 	_, err := s.MarshalJSON()
@@ -61,19 +64,19 @@ func TestUntrustedSigstorePayloadMarshalJSON(t *testing.T) {
 	}{
 		{
 			UntrustedSigstorePayload{
-				untrustedDockerManifestDigest: "digest!@#",
+				untrustedDockerManifestDigest: testDigest,
 				untrustedDockerReference:      "reference#@!",
 				untrustedCreatorID:            &creatorID,
 				untrustedTimestamp:            &timestamp,
 			},
-			"{\"critical\":{\"identity\":{\"docker-reference\":\"reference#@!\"},\"image\":{\"docker-manifest-digest\":\"digest!@#\"},\"type\":\"cosign container image signature\"},\"optional\":{\"creator\":\"CREATOR\",\"timestamp\":1484683104}}",
+			"{\"critical\":{\"identity\":{\"docker-reference\":\"reference#@!\"},\"image\":{\"docker-manifest-digest\":\"" + testDigest + "\"},\"type\":\"cosign container image signature\"},\"optional\":{\"creator\":\"CREATOR\",\"timestamp\":1484683104}}",
 		},
 		{
 			UntrustedSigstorePayload{
-				untrustedDockerManifestDigest: "digest!@#",
+				untrustedDockerManifestDigest: testDigest,
 				untrustedDockerReference:      "reference#@!",
 			},
-			"{\"critical\":{\"identity\":{\"docker-reference\":\"reference#@!\"},\"image\":{\"docker-manifest-digest\":\"digest!@#\"},\"type\":\"cosign container image signature\"},\"optional\":{}}",
+			"{\"critical\":{\"identity\":{\"docker-reference\":\"reference#@!\"},\"image\":{\"docker-manifest-digest\":\"" + testDigest + "\"},\"type\":\"cosign container image signature\"},\"optional\":{}}",
 		},
 	} {
 		marshaled, err := c.input.MarshalJSON()
@@ -104,6 +107,8 @@ func assertUnmarshalUntrustedSigstorePayloadFails(t *testing.T, input []byte) {
 }
 
 func TestUntrustedSigstorePayloadUnmarshalJSON(t *testing.T) {
+	const testDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 	// Invalid input. Note that json.Unmarshal is guaranteed to validate input before calling our
 	// UnmarshalJSON implementation; so test that first, then test our error handling for completeness.
 	assertUnmarshalUntrustedSigstorePayloadFails(t, []byte("&"))
@@ -115,7 +120,7 @@ func TestUntrustedSigstorePayloadUnmarshalJSON(t *testing.T) {
 	assertUnmarshalUntrustedSigstorePayloadFails(t, []byte("1"))
 
 	// Start with a valid JSON.
-	validSig := NewUntrustedSigstorePayload("digest!@#", "reference#@!")
+	validSig := NewUntrustedSigstorePayload(testDigest, "reference#@!")
 	validJSON, err := validSig.MarshalJSON()
 	require.NoError(t, err)
 
@@ -158,6 +163,7 @@ func TestUntrustedSigstorePayloadUnmarshalJSON(t *testing.T) {
 		func(v mSA) { x(v, "critical", "image")["unexpected"] = 1 },
 		// Invalid "docker-manifest-digest"
 		func(v mSA) { x(v, "critical", "image")["docker-manifest-digest"] = 1 },
+		func(v mSA) { x(v, "critical", "image")["docker-manifest-digest"] = "sha256:../.." },
 		// Invalid "identity" object
 		func(v mSA) { x(v, "critical")["identity"] = 1 },
 		func(v mSA) { delete(x(v, "critical", "identity"), "docker-reference") },
@@ -188,7 +194,7 @@ func TestUntrustedSigstorePayloadUnmarshalJSON(t *testing.T) {
 
 	// Optional fields can be missing
 	validSig = UntrustedSigstorePayload{
-		untrustedDockerManifestDigest: "digest!@#",
+		untrustedDockerManifestDigest: testDigest,
 		untrustedDockerReference:      "reference#@!",
 		untrustedCreatorID:            nil,
 		untrustedTimestamp:            nil,
@@ -199,11 +205,18 @@ func TestUntrustedSigstorePayloadUnmarshalJSON(t *testing.T) {
 	assert.Equal(t, validSig, s)
 }
 
+// verifySigstorePayloadBlobSignature is tested by TestVerifySigstorePayload
+
 func TestVerifySigstorePayload(t *testing.T) {
 	publicKeyPEM, err := os.ReadFile("./testdata/cosign.pub")
 	require.NoError(t, err)
 	publicKey, err := cryptoutils.UnmarshalPEMToPublicKey(publicKeyPEM)
 	require.NoError(t, err)
+	publicKeyPEM2, err := os.ReadFile("./testdata/cosign2.pub")
+	require.NoError(t, err)
+	publicKey2, err := cryptoutils.UnmarshalPEMToPublicKey(publicKeyPEM2)
+	require.NoError(t, err)
+	singlePublicKey := []crypto.PublicKey{publicKey}
 
 	type acceptanceData struct {
 		signedDockerReference      string
@@ -243,27 +256,25 @@ func TestVerifySigstorePayload(t *testing.T) {
 	}
 
 	// Successful verification
-	wanted = signatureData
-	recorded = acceptanceData{}
-	res, err := VerifySigstorePayload(publicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
-	require.NoError(t, err)
-	assert.Equal(t, res, &UntrustedSigstorePayload{
-		untrustedDockerManifestDigest: TestSigstoreManifestDigest,
-		untrustedDockerReference:      TestSigstoreSignatureReference,
-		untrustedCreatorID:            nil,
-		untrustedTimestamp:            nil,
-	})
-	assert.Equal(t, signatureData, recorded)
+	for _, publicKeys := range [][]crypto.PublicKey{
+		singlePublicKey,
+		{publicKey, publicKey2}, // The matching key is first
+		{publicKey2, publicKey}, // The matching key is second
+	} {
+		wanted = signatureData
+		recorded = acceptanceData{}
+		res, err := VerifySigstorePayload(publicKeys, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
+		require.NoError(t, err)
+		assert.Equal(t, res, &UntrustedSigstorePayload{
+			untrustedDockerManifestDigest: TestSigstoreManifestDigest,
+			untrustedDockerReference:      TestSigstoreSignatureReference,
+			untrustedCreatorID:            nil,
+			untrustedTimestamp:            nil,
+		})
+		assert.Equal(t, signatureData, recorded)
+	}
 
 	// For extra paranoia, test that we return a nil signature object on error.
-
-	// Invalid verifier
-	recorded = acceptanceData{}
-	invalidPublicKey := struct{}{} // crypto.PublicKey is, for some reason, just an any, so this is acceptable.
-	res, err = VerifySigstorePayload(invalidPublicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
-	assert.Error(t, err)
-	assert.Nil(t, res)
-	assert.Equal(t, acceptanceData{}, recorded)
 
 	// Invalid base64 encoding
 	for _, invalidBase64Sig := range []string{
@@ -272,7 +283,28 @@ func TestVerifySigstorePayload(t *testing.T) {
 		cryptoBase64Sig[:len(cryptoBase64Sig)-1], // Truncated base64 data
 	} {
 		recorded = acceptanceData{}
-		res, err = VerifySigstorePayload(publicKey, sigstoreSig.UntrustedPayload(), invalidBase64Sig, recordingRules)
+		res, err := VerifySigstorePayload(singlePublicKey, sigstoreSig.UntrustedPayload(), invalidBase64Sig, recordingRules)
+		assert.Error(t, err)
+		assert.Nil(t, res)
+		assert.Equal(t, acceptanceData{}, recorded)
+	}
+
+	// No public keys
+	recorded = acceptanceData{}
+	res, err := VerifySigstorePayload([]crypto.PublicKey{}, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
+	assert.Error(t, err)
+	assert.Nil(t, res)
+	assert.Equal(t, acceptanceData{}, recorded)
+
+	// Invalid verifier:
+	// crypto.PublicKey is, for some reason, just an any, so using a struct{}{} to trigger this code path works.
+	for _, invalidPublicKeys := range [][]crypto.PublicKey{
+		{struct{}{}},            // A single invalid key
+		{struct{}{}, publicKey}, // An invalid key, followed by a matching key
+		{publicKey, struct{}{}}, // A matching key, but the configuration also includes an invalid key
+	} {
+		recorded = acceptanceData{}
+		res, err = VerifySigstorePayload(invalidPublicKeys, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
 		assert.Error(t, err)
 		assert.Nil(t, res)
 		assert.Equal(t, acceptanceData{}, recorded)
@@ -284,10 +316,22 @@ func TestVerifySigstorePayload(t *testing.T) {
 	for _, invalidSig := range [][]byte{
 		{}, // Empty signature
 		[]byte("invalid signature"),
-		append(slices.Clone(validSignatureBytes), validSignatureBytes...),
+		append(bytes.Clone(validSignatureBytes), validSignatureBytes...),
 	} {
 		recorded = acceptanceData{}
-		res, err = VerifySigstorePayload(publicKey, sigstoreSig.UntrustedPayload(), base64.StdEncoding.EncodeToString(invalidSig), recordingRules)
+		res, err = VerifySigstorePayload(singlePublicKey, sigstoreSig.UntrustedPayload(), base64.StdEncoding.EncodeToString(invalidSig), recordingRules)
+		assert.Error(t, err)
+		assert.Nil(t, res)
+		assert.Equal(t, acceptanceData{}, recorded)
+	}
+
+	// No matching public keys
+	for _, nonmatchingPublicKeys := range [][]crypto.PublicKey{
+		{publicKey2},
+		{publicKey2, publicKey2},
+	} {
+		recorded = acceptanceData{}
+		res, err = VerifySigstorePayload(nonmatchingPublicKeys, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
 		assert.Error(t, err)
 		assert.Nil(t, res)
 		assert.Equal(t, acceptanceData{}, recorded)
@@ -295,14 +339,14 @@ func TestVerifySigstorePayload(t *testing.T) {
 
 	// Valid signature of non-JSON
 	recorded = acceptanceData{}
-	res, err = VerifySigstorePayload(publicKey, []byte("&"), "MEUCIARnnxZQPALBfqkB4aNAYXad79Qs6VehcrgIeZ8p7I2FAiEAzq2HXwXlz1iJeh+ucUR3L0zpjynQk6Rk0+/gXYp49RU=", recordingRules)
+	res, err = VerifySigstorePayload(singlePublicKey, []byte("&"), "MEUCIARnnxZQPALBfqkB4aNAYXad79Qs6VehcrgIeZ8p7I2FAiEAzq2HXwXlz1iJeh+ucUR3L0zpjynQk6Rk0+/gXYp49RU=", recordingRules)
 	assert.Error(t, err)
 	assert.Nil(t, res)
 	assert.Equal(t, acceptanceData{}, recorded)
 
 	// Valid signature of an unacceptable JSON
 	recorded = acceptanceData{}
-	res, err = VerifySigstorePayload(publicKey, []byte("{}"), "MEUCIQDkySOBGxastVP0+koTA33NH5hXjwosFau4rxTPN6g48QIgb7eWKkGqfEpHMM3aT4xiqyP/170jEkdFuciuwN4mux4=", recordingRules)
+	res, err = VerifySigstorePayload(singlePublicKey, []byte("{}"), "MEUCIQDkySOBGxastVP0+koTA33NH5hXjwosFau4rxTPN6g48QIgb7eWKkGqfEpHMM3aT4xiqyP/170jEkdFuciuwN4mux4=", recordingRules)
 	assert.Error(t, err)
 	assert.Nil(t, res)
 	assert.Equal(t, acceptanceData{}, recorded)
@@ -311,7 +355,7 @@ func TestVerifySigstorePayload(t *testing.T) {
 	wanted = signatureData
 	wanted.signedDockerManifestDigest = "invalid digest"
 	recorded = acceptanceData{}
-	res, err = VerifySigstorePayload(publicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
+	res, err = VerifySigstorePayload(singlePublicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
 	assert.Error(t, err)
 	assert.Nil(t, res)
 	assert.Equal(t, acceptanceData{
@@ -322,7 +366,7 @@ func TestVerifySigstorePayload(t *testing.T) {
 	wanted = signatureData
 	wanted.signedDockerReference = "unexpected docker reference"
 	recorded = acceptanceData{}
-	res, err = VerifySigstorePayload(publicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
+	res, err = VerifySigstorePayload(singlePublicKey, sigstoreSig.UntrustedPayload(), cryptoBase64Sig, recordingRules)
 	assert.Error(t, err)
 	assert.Nil(t, res)
 	assert.Equal(t, signatureData, recorded)

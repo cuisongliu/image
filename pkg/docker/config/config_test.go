@@ -12,6 +12,7 @@ import (
 	"github.com/containers/image/v5/types"
 	dockerReference "github.com/distribution/reference"
 	"github.com/docker/cli/cli/config"
+	"github.com/docker/cli/cli/config/credentials"
 	configtypes "github.com/docker/cli/cli/config/types"
 	"github.com/docker/docker/registry"
 	"github.com/stretchr/testify/assert"
@@ -481,6 +482,9 @@ func TestGetCredentialsInteroperability(t *testing.T) {
 		if serverAddress == "" {
 			serverAddress = registry.IndexServer
 		}
+		if serverAddress != registry.IndexServer {
+			serverAddress = credentials.ConvertToHostname(serverAddress)
+		}
 		configFile, err := config.Load(configDir)
 		require.NoError(t, err)
 		err = configFile.GetCredentialsStore(serverAddress).Store(configtypes.AuthConfig{
@@ -502,7 +506,7 @@ func TestGetCredentialsInteroperability(t *testing.T) {
 		if c.loginKey == "" {
 			regsToLogout = []string{registry.IndexServer}
 		} else {
-			hostnameAddress := registry.ConvertToHostname(c.loginKey)
+			hostnameAddress := credentials.ConvertToHostname(c.loginKey)
 			regsToLogout = []string{c.loginKey, hostnameAddress, "http://" + hostnameAddress, "https://" + hostnameAddress}
 		}
 		succeeded := false

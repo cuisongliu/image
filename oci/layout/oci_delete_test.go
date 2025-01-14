@@ -3,14 +3,16 @@ package layout
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/containers/image/v5/types"
 	digest "github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	cp "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +93,14 @@ func TestReferenceDeleteImage_sharedBlobDir(t *testing.T) {
 	require.Equal(t, 0, len(index.Manifests))
 }
 
+func assertRefNameIsMissing(t *testing.T, index *imgspecv1.Index, refName string) {
+	if slices.ContainsFunc(index.Manifests, func(desc imgspecv1.Descriptor) bool {
+		return desc.Annotations[imgspecv1.AnnotationRefName] == refName
+	}) {
+		assert.Failf(t, "index still contains refName %q after deletion", refName)
+	}
+}
+
 func TestReferenceDeleteImage_multipleImages(t *testing.T) {
 	tmpDir := loadFixture(t, "delete_image_multiple_images")
 
@@ -117,14 +127,7 @@ func TestReferenceDeleteImage_multipleImages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 6, len(index.Manifests))
 	// .. Check that the image is not in the index anymore
-	for _, descriptor := range index.Manifests {
-		switch descriptor.Annotations[imgspecv1.AnnotationRefName] {
-		case "3.17.5":
-			assert.Fail(t, "image still present in the index after deletion")
-		default:
-			continue
-		}
-	}
+	assertRefNameIsMissing(t, index, "3.17.5")
 }
 
 func TestReferenceDeleteImage_multipleImages_blobsUsedByOtherImages(t *testing.T) {
@@ -153,14 +156,7 @@ func TestReferenceDeleteImage_multipleImages_blobsUsedByOtherImages(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, 6, len(index.Manifests))
 	// .. Check that the image is not in the index anymore
-	for _, descriptor := range index.Manifests {
-		switch descriptor.Annotations[imgspecv1.AnnotationRefName] {
-		case "1.0.0":
-			assert.Fail(t, "image still present in the index after deletion")
-		default:
-			continue
-		}
-	}
+	assertRefNameIsMissing(t, index, "1.0.0")
 }
 
 func TestReferenceDeleteImage_multipleImages_imageDoesNotExist(t *testing.T) {
@@ -213,14 +209,7 @@ func TestReferenceDeleteImage_multipleImages_nestedIndexImage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 6, len(index.Manifests))
 	// .. Check that the image is not in the index anymore
-	for _, descriptor := range index.Manifests {
-		switch descriptor.Annotations[imgspecv1.AnnotationRefName] {
-		case "3.16.7":
-			assert.Fail(t, "image still present in the index after deletion")
-		default:
-			continue
-		}
-	}
+	assertRefNameIsMissing(t, index, "3.16.7")
 }
 
 func TestReferenceDeleteImage_multipleImages_nestedIndexImage_refWithSameContent(t *testing.T) {
@@ -275,16 +264,49 @@ func TestReferenceDeleteImage_multipleImages_twoIdenticalReferences(t *testing.T
 }
 
 func loadFixture(t *testing.T, fixtureName string) string {
-	tmpDir := t.TempDir()
-	err := cp.Copy(fmt.Sprintf("fixtures/%v/", fixtureName), tmpDir)
+	destDir := t.TempDir()
+	srcDir := filepath.Join("fixtures", fixtureName)
+	err := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) (retErr error) {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(destDir, relPath)
+		switch d.Type() {
+		case fs.ModeDir:
+			return os.MkdirAll(destPath, 0o700)
+		case 0: // regular file
+			src, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer src.Close()
+			dest, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := dest.Close(); err != nil && retErr == nil {
+					retErr = err
+				}
+			}()
+			_, err = io.Copy(dest, src)
+			return err
+		default:
+			return fmt.Errorf("unexpected file type %#v", d.Type())
+		}
+	})
 	require.NoError(t, err)
-	return tmpDir
+	return destDir
 }
 
 func assertBlobExists(t *testing.T, blobsDir string, blobDigest string) {
 	digest, err := digest.Parse(blobDigest)
 	require.NoError(t, err)
-	blobPath := filepath.Join(blobsDir, digest.Algorithm().String(), digest.Hex())
+	blobPath := filepath.Join(blobsDir, digest.Algorithm().String(), digest.Encoded())
 	_, err = os.Stat(blobPath)
 	require.NoError(t, err)
 }
@@ -292,7 +314,7 @@ func assertBlobExists(t *testing.T, blobsDir string, blobDigest string) {
 func assertBlobDoesNotExist(t *testing.T, blobsDir string, blobDigest string) {
 	digest, err := digest.Parse(blobDigest)
 	require.NoError(t, err)
-	blobPath := filepath.Join(blobsDir, digest.Algorithm().String(), digest.Hex())
+	blobPath := filepath.Join(blobsDir, digest.Algorithm().String(), digest.Encoded())
 	_, err = os.Stat(blobPath)
 	require.True(t, os.IsNotExist(err))
 }

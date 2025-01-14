@@ -21,7 +21,6 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 )
 
 // assert that crypto.PublicKey matches the on in certPEM.
@@ -136,7 +135,7 @@ func TestFulcioIssuerInCertificate(t *testing.T) {
 			extensions: []pkix.Extension{
 				{
 					Id:    certificate.OIDIssuerV2,
-					Value: append(slices.Clone(asn1MarshalTest(t, "https://", "utf8")), asn1MarshalTest(t, "example.com", "utf8")...),
+					Value: append(bytes.Clone(asn1MarshalTest(t, "https://", "utf8")), asn1MarshalTest(t, "example.com", "utf8")...),
 				},
 			},
 			errorFragment: "invalid ASN.1 in OIDC issuer v2 extension, trailing data",
@@ -328,7 +327,7 @@ func TestFulcioTrustRootVerifyFulcioCertificateAtTime(t *testing.T) {
 					Value:    sansBytes,
 				})
 			},
-			errorFragment: "Required email test-user@example.com not found",
+			errorFragment: `Required email "test-user@example.com" not found`,
 		},
 		{ // Other completely unrecognized critical extensions still cause failures
 			name: "Unhandled critical extension",
@@ -368,7 +367,7 @@ func TestFulcioTrustRootVerifyFulcioCertificateAtTime(t *testing.T) {
 			fn: func(cert *x509.Certificate) {
 				cert.EmailAddresses = nil
 			},
-			errorFragment: "Required email test-user@example.com not found",
+			errorFragment: `Required email "test-user@example.com" not found`,
 		},
 		{
 			name: "Multiple emails, one matches",
@@ -382,14 +381,14 @@ func TestFulcioTrustRootVerifyFulcioCertificateAtTime(t *testing.T) {
 			fn: func(cert *x509.Certificate) {
 				cert.EmailAddresses = []string{"a@example.com"}
 			},
-			errorFragment: "Required email test-user@example.com not found",
+			errorFragment: `Required email "test-user@example.com" not found`,
 		},
 		{
 			name: "Multiple emails, no matches",
 			fn: func(cert *x509.Certificate) {
 				cert.EmailAddresses = []string{"a@example.com", "b@example.com", "c@example.com"}
 			},
-			errorFragment: "Required email test-user@example.com not found",
+			errorFragment: `Required email "test-user@example.com" not found`,
 		},
 	} {
 		testLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -443,6 +442,7 @@ func TestVerifyRekorFulcio(t *testing.T) {
 	require.NoError(t, err)
 	rekorKeyECDSA, ok := rekorKey.(*ecdsa.PublicKey)
 	require.True(t, ok)
+	rekorKeysECDSA := []*ecdsa.PublicKey{rekorKeyECDSA}
 	setBytes, err := os.ReadFile("fixtures/rekor-set")
 	require.NoError(t, err)
 	sigBase64, err := os.ReadFile("fixtures/rekor-sig")
@@ -451,7 +451,7 @@ func TestVerifyRekorFulcio(t *testing.T) {
 	require.NoError(t, err)
 
 	// Success
-	pk, err := verifyRekorFulcio(rekorKeyECDSA, &fulcioTrustRoot{
+	pk, err := verifyRekorFulcio(rekorKeysECDSA, &fulcioTrustRoot{
 		caCertificates: caCertificates,
 		oidcIssuer:     "https://github.com/login/oauth",
 		subjectEmail:   "mitr@redhat.com",
@@ -460,7 +460,7 @@ func TestVerifyRekorFulcio(t *testing.T) {
 	assertPublicKeyMatchesCert(t, certBytes, pk)
 
 	// Rekor failure
-	pk, err = verifyRekorFulcio(rekorKeyECDSA, &fulcioTrustRoot{
+	pk, err = verifyRekorFulcio(rekorKeysECDSA, &fulcioTrustRoot{
 		caCertificates: caCertificates,
 		oidcIssuer:     "https://github.com/login/oauth",
 		subjectEmail:   "mitr@redhat.com",
@@ -469,7 +469,7 @@ func TestVerifyRekorFulcio(t *testing.T) {
 	assert.Nil(t, pk)
 
 	// Fulcio failure
-	pk, err = verifyRekorFulcio(rekorKeyECDSA, &fulcioTrustRoot{
+	pk, err = verifyRekorFulcio(rekorKeysECDSA, &fulcioTrustRoot{
 		caCertificates: caCertificates,
 		oidcIssuer:     "https://github.com/login/oauth",
 		subjectEmail:   "this-does-not-match@example.com",
