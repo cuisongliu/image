@@ -10,7 +10,6 @@ import (
 
 	"github.com/containers/image/v5/directory"
 	"github.com/containers/image/v5/docker"
-	"golang.org/x/exp/maps"
 
 	// this import is needed  where we use the "atomic" transport in TestPolicyUnmarshalJSON
 	_ "github.com/containers/image/v5/openshift"
@@ -153,35 +152,41 @@ func TestDefaultPolicyPath(t *testing.T) {
 	const rootPrefix = "/root/prefix"
 	tempHome := t.TempDir()
 	userDefaultPolicyPath := filepath.Join(tempHome, userPolicyFile)
-
+	tempsystemdefaultpath := filepath.Join(tempHome, systemDefaultPolicyPath)
 	for _, c := range []struct {
-		sys             *types.SystemContext
-		userfilePresent bool
-		expected        string
+		sys               *types.SystemContext
+		userfilePresent   bool
+		systemfilePresent bool
+		expected          string
+		expectedError     string
 	}{
 		// The common case
-		{nil, false, systemDefaultPolicyPath},
+		{nil, false, true, tempsystemdefaultpath, ""},
 		// There is a context, but it does not override the path.
-		{&types.SystemContext{}, false, systemDefaultPolicyPath},
+		{&types.SystemContext{}, false, true, tempsystemdefaultpath, ""},
 		// Path overridden
-		{&types.SystemContext{SignaturePolicyPath: nondefaultPath}, false, nondefaultPath},
+		{&types.SystemContext{SignaturePolicyPath: nondefaultPath}, false, true, nondefaultPath, ""},
 		// Root overridden
 		{
 			&types.SystemContext{RootForImplicitAbsolutePaths: rootPrefix},
 			false,
-			filepath.Join(rootPrefix, systemDefaultPolicyPath),
+			true,
+			filepath.Join(rootPrefix, tempsystemdefaultpath),
+			"",
 		},
 		// Empty context and user policy present
-		{&types.SystemContext{}, true, userDefaultPolicyPath},
+		{&types.SystemContext{}, true, true, userDefaultPolicyPath, ""},
 		// Only user policy present
-		{nil, true, userDefaultPolicyPath},
+		{nil, true, true, userDefaultPolicyPath, ""},
 		// Context signature path and user policy present
 		{
 			&types.SystemContext{
 				SignaturePolicyPath: nondefaultPath,
 			},
 			true,
+			true,
 			nondefaultPath,
+			"",
 		},
 		// Root and user policy present
 		{
@@ -189,7 +194,9 @@ func TestDefaultPolicyPath(t *testing.T) {
 				RootForImplicitAbsolutePaths: rootPrefix,
 			},
 			true,
+			true,
 			userDefaultPolicyPath,
+			"",
 		},
 		// Context and user policy file preset simultaneously
 		{
@@ -198,7 +205,9 @@ func TestDefaultPolicyPath(t *testing.T) {
 				SignaturePolicyPath:          nondefaultPath,
 			},
 			true,
+			true,
 			nondefaultPath,
+			"",
 		},
 		// Root and path overrides present simultaneously,
 		{
@@ -207,22 +216,41 @@ func TestDefaultPolicyPath(t *testing.T) {
 				SignaturePolicyPath:          nondefaultPath,
 			},
 			false,
+			true,
 			nondefaultPath,
+			"",
 		},
 		// No environment expansion happens in the overridden paths
-		{&types.SystemContext{SignaturePolicyPath: variableReference}, false, variableReference},
+		{&types.SystemContext{SignaturePolicyPath: variableReference}, false, true, variableReference, ""},
+		// No policy.json file is present in userfilePath and systemfilePath
+		{nil, false, false, "", fmt.Sprintf("no policy.json file found at any of the following: %q, %q", userDefaultPolicyPath, tempsystemdefaultpath)},
 	} {
-		if c.userfilePresent {
-			err := os.MkdirAll(filepath.Dir(userDefaultPolicyPath), os.ModePerm)
-			require.NoError(t, err)
-			f, err := os.Create(userDefaultPolicyPath)
-			require.NoError(t, err)
-			f.Close()
-		} else {
-			os.Remove(userDefaultPolicyPath)
+		paths := []struct {
+			condition bool
+			path      string
+		}{
+			{c.userfilePresent, userDefaultPolicyPath},
+			{c.systemfilePresent, tempsystemdefaultpath},
 		}
-		path := defaultPolicyPathWithHomeDir(c.sys, tempHome)
-		assert.Equal(t, c.expected, path)
+		for _, p := range paths {
+			if p.condition {
+				err := os.MkdirAll(filepath.Dir(p.path), os.ModePerm)
+				require.NoError(t, err)
+				f, err := os.Create(p.path)
+				require.NoError(t, err)
+				f.Close()
+			} else {
+				os.Remove(p.path)
+			}
+		}
+		path, err := defaultPolicyPathWithHomeDir(c.sys, tempHome, tempsystemdefaultpath)
+		if c.expectedError != "" {
+			assert.Empty(t, path)
+			assert.EqualError(t, err, c.expectedError)
+		} else {
+			require.NoError(t, err)
+			assert.Equal(t, c.expected, path)
+		}
 	}
 }
 
@@ -296,10 +324,10 @@ func addExtraJSONMember(t *testing.T, encoded []byte, name string, extra any) []
 	extraJSON, err := json.Marshal(extra)
 	require.NoError(t, err)
 
-	require.True(t, bytes.HasSuffix(encoded, []byte("}")))
-	preservedLen := len(encoded) - 1
+	preserved, ok := bytes.CutSuffix(encoded, []byte("}"))
+	require.True(t, ok)
 
-	res := bytes.Join([][]byte{encoded[:preservedLen], []byte(`,"`), []byte(name), []byte(`":`), extraJSON, []byte("}")}, nil)
+	res := bytes.Join([][]byte{preserved, []byte(`,"`), []byte(name), []byte(`":`), extraJSON, []byte("}")}, nil)
 	// Verify that the result is valid JSON, as a sanity check that we are actually triggering
 	// the “duplicate member” case in the caller.
 	var raw map[string]any
@@ -586,7 +614,7 @@ func TestPolicyTransportScopesWithTransportUnmarshalJSON(t *testing.T) {
 		// The "" scope is missing
 		func(v mSA) { delete(v, "") },
 		// The policy is completely empty
-		func(v mSA) { maps.Clear(v) },
+		func(v mSA) { clear(v) },
 	}
 	for _, fn := range allowedModificationFns {
 		err = tryUnmarshalModifiedPTS(t, &pts, docker.Transport, validJSON, fn)

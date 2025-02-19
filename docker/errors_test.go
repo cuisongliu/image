@@ -3,7 +3,6 @@ package docker
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"net/http"
 	"testing"
 
@@ -109,8 +108,7 @@ func TestRegistryHTTPResponseToError(t *testing.T) {
 			errorCode:         &errcode.ErrorCodeUnknown,
 			fn: func(t *testing.T, err error) {
 				var e errcode.Error
-				ok := errors.As(err, &e)
-				require.True(t, ok)
+				require.ErrorAs(t, err, &e)
 				// Note: (skopeo inspect) is checking for this errcode.Error value
 				assert.Equal(t, errcode.Error{
 					Code:    errcode.ErrorCodeUnknown, // The NOT_FOUND value is not defined, and turns into Unknown
@@ -140,8 +138,7 @@ func TestRegistryHTTPResponseToError(t *testing.T) {
 			errorCode:         &errcode.ErrorCodeUnknown,
 			fn: func(t *testing.T, err error) {
 				var e errcode.Error
-				ok := errors.As(err, &e)
-				require.True(t, ok)
+				require.ErrorAs(t, err, &e)
 				// isManifestUnknownError is checking for this
 				assert.Equal(t, errcode.Error{
 					Code:    errcode.ErrorCodeUnknown, // The 404 value is not defined, and turns into Unknown
@@ -166,11 +163,37 @@ func TestRegistryHTTPResponseToError(t *testing.T) {
 			unwrappedErrorPtr: &unwrappedUnexpectedHTTPResponseError,
 			fn: func(t *testing.T, err error) {
 				var e *unexpectedHTTPResponseError
-				ok := errors.As(err, &e)
-				require.True(t, ok)
+				require.ErrorAs(t, err, &e)
 				// isManifestUnknownError is checking for this
 				assert.Equal(t, 404, e.StatusCode)
 				assert.Equal(t, []byte("Not found\r"), e.Response)
+			},
+		},
+		{ // Harbor v2.10.2 uses an unspecified NOT_FOUND error code
+			name: "Harbor v2.10.2 manifest not found",
+			response: "HTTP/1.1 404 Not Found\r\n" +
+				"Content-Length: 153\r\n" +
+				"Connection: keep-alive\r\n" +
+				"Content-Type: application/json; charset=utf-8\r\n" +
+				"Date: Wed, 08 May 2024 08:14:59 GMT\r\n" +
+				"Server: nginx\r\n" +
+				"Set-Cookie: sid=f617c257877837614ada2561513d6827; Path=/; HttpOnly\r\n" +
+				"X-Request-Id: 1b151fb1-c943-4190-a9ce-5156ed5e3200\r\n" +
+				"\r\n" +
+				"{\"errors\":[{\"code\":\"NOT_FOUND\",\"message\":\"artifact test/alpine:sha256-443205b0cfcc78444321d56a2fe273f06e27b2c72b5058f8d7e975997d45b015.sig not found\"}]}\n",
+			errorString:       "unknown: artifact test/alpine:sha256-443205b0cfcc78444321d56a2fe273f06e27b2c72b5058f8d7e975997d45b015.sig not found",
+			errorType:         errcode.Error{},
+			unwrappedErrorPtr: &unwrappedErrcodeError,
+			errorCode:         &errcode.ErrorCodeUnknown,
+			fn: func(t *testing.T, err error) {
+				var e errcode.Error
+				require.ErrorAs(t, err, &e)
+				// isManifestUnknownError is checking for this
+				assert.Equal(t, errcode.Error{
+					Code:    errcode.ErrorCodeUnknown, // The NOT_FOUND value is not defined, and turns into Unknown
+					Message: "artifact test/alpine:sha256-443205b0cfcc78444321d56a2fe273f06e27b2c72b5058f8d7e975997d45b015.sig not found",
+					Detail:  nil,
+				}, e)
 			},
 		},
 	} {
@@ -184,13 +207,11 @@ func TestRegistryHTTPResponseToError(t *testing.T) {
 			assert.IsType(t, c.errorType, err, c.name)
 		}
 		if c.unwrappedErrorPtr != nil {
-			found := errors.As(err, c.unwrappedErrorPtr)
-			assert.True(t, found, c.name)
+			assert.ErrorAs(t, err, c.unwrappedErrorPtr, c.name)
 		}
 		if c.errorCode != nil {
 			var ec errcode.ErrorCoder
-			ok := errors.As(err, &ec)
-			require.True(t, ok, c.name)
+			require.ErrorAs(t, err, &ec, c.name)
 			assert.Equal(t, *c.errorCode, ec.ErrorCode(), c.name)
 		}
 		if c.fn != nil {

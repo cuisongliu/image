@@ -3,6 +3,7 @@ package manifest
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	compressionTypes "github.com/containers/image/v5/pkg/compression/types"
@@ -10,7 +11,6 @@ import (
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 )
 
 func TestSchema2ListPublicFromManifest(t *testing.T) {
@@ -106,4 +106,16 @@ func TestSchema2ListFromManifest(t *testing.T) {
 	})
 	// Extra fields are rejected
 	testValidManifestWithExtraFieldsIsRejected(t, parser, validManifest, []string{"config", "fsLayers", "history", "layers"})
+}
+
+func TestSchema2ListCloneInternal(t *testing.T) {
+	// This fixture should be kept updated to have all known fields set to non-empty values
+	blob, err := os.ReadFile(filepath.Join("testdata", "v2list.everything.json"))
+	require.NoError(t, err)
+	m, err := Schema2ListFromManifest(blob)
+	require.NoError(t, err)
+	clone_ := m.CloneInternal()
+	clone, ok := clone_.(*Schema2List)
+	require.True(t, ok)
+	assert.Equal(t, m.Schema2ListPublic, clone.Schema2ListPublic)
 }

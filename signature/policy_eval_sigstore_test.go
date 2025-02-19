@@ -87,9 +87,152 @@ func TestPRSigstoreSignedFulcioPrepareTrustRoot(t *testing.T) {
 	}
 }
 
+func TestPRSigstoreSignedPKIPrepareTrustRoot(t *testing.T) {
+	const testCARootsPath = "fixtures/pki_root_crts.pem"
+	const testCAIntermediatesPath = "fixtures/pki_intermediate_crts.pem"
+	testCARootsData, err := os.ReadFile(testCARootsPath)
+	require.NoError(t, err)
+	testCAIntermediatesData, err := os.ReadFile(testCAIntermediatesPath)
+	require.NoError(t, err)
+	testSubjectEmail := "test@example.com"
+	testSubjectHostname := "myhost.example.com"
+
+	// Success
+	for _, c := range []struct {
+		option          []PRSigstoreSignedPKIOption
+		intermediates   bool
+		subjectEmail    string
+		subjectHostname string
+	}{
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsPath(testCARootsPath),
+				PRSigstoreSignedPKIWithSubjectEmail(testSubjectEmail),
+				PRSigstoreSignedPKIWithSubjectHostname(testSubjectHostname),
+			},
+			subjectEmail:    testSubjectEmail,
+			subjectHostname: testSubjectHostname,
+		},
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsData(testCARootsData),
+				PRSigstoreSignedPKIWithSubjectEmail(testSubjectEmail),
+				PRSigstoreSignedPKIWithSubjectHostname(testSubjectHostname),
+			},
+			subjectEmail:    testSubjectEmail,
+			subjectHostname: testSubjectHostname,
+		},
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsPath(testCARootsPath),
+				PRSigstoreSignedPKIWithCAIntermediatesPath(testCAIntermediatesPath),
+				PRSigstoreSignedPKIWithSubjectEmail(testSubjectEmail),
+				PRSigstoreSignedPKIWithSubjectHostname(testSubjectHostname),
+			},
+			intermediates:   true,
+			subjectEmail:    testSubjectEmail,
+			subjectHostname: testSubjectHostname,
+		},
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsPath(testCARootsPath),
+				PRSigstoreSignedPKIWithCAIntermediatesData(testCAIntermediatesData),
+				PRSigstoreSignedPKIWithSubjectEmail(testSubjectEmail),
+				PRSigstoreSignedPKIWithSubjectHostname(testSubjectHostname),
+			},
+			intermediates:   true,
+			subjectEmail:    testSubjectEmail,
+			subjectHostname: testSubjectHostname,
+		},
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsData(testCARootsData),
+				PRSigstoreSignedPKIWithSubjectEmail(testSubjectEmail),
+			},
+			subjectEmail: testSubjectEmail,
+		},
+		{
+			option: []PRSigstoreSignedPKIOption{
+				PRSigstoreSignedPKIWithCARootsData(testCARootsData),
+				PRSigstoreSignedPKIWithSubjectHostname(testSubjectHostname),
+			},
+			subjectHostname: testSubjectHostname,
+		},
+	} {
+		pki, err := newPRSigstoreSignedPKI(c.option...)
+		require.NoError(t, err)
+		res, err := pki.prepareTrustRoot()
+		require.NoError(t, err)
+		assert.NotNil(t, res.caRootsCertificates)
+		if c.intermediates {
+			assert.NotNil(t, res.caIntermediateCertificates)
+		}
+		assert.Equal(t, c.subjectEmail, res.subjectEmail)
+		assert.Equal(t, c.subjectHostname, res.subjectHostname)
+	}
+
+	// Failure
+	for _, pki := range []prSigstoreSignedPKI{ // Use a prSigstoreSignedPKI because these configurations should be rejected by NewPRSigstoreSignedPKI.
+		{ // Neither CARootsPath nor CARootsData specified
+			SubjectEmail:    testSubjectEmail,
+			SubjectHostname: testSubjectHostname,
+		},
+		{ // Both CARootsPath and CARootsData specified
+			CARootsPath:     testCARootsPath,
+			CARootsData:     testCARootsData,
+			SubjectEmail:    testSubjectEmail,
+			SubjectHostname: testSubjectHostname,
+		},
+		{ // Both CAIntermediatesPath and CAIntermediatesData specified
+			CARootsPath:         testCARootsPath,
+			CAIntermediatesPath: testCAIntermediatesPath,
+			CAIntermediatesData: testCAIntermediatesData,
+			SubjectEmail:        testSubjectEmail,
+			SubjectHostname:     testSubjectHostname,
+		},
+		{ // Invalid CARootsPath
+			CARootsPath:  "fixtures/image.signature",
+			SubjectEmail: testSubjectEmail,
+		},
+		{ // Invalid CAIntermediatesPath
+			CARootsPath:         testCARootsPath,
+			CAIntermediatesPath: "fixtures/image.signature",
+			SubjectEmail:        testSubjectEmail,
+		},
+		{ // Unusable CARootsPath
+			CARootsPath:  "fixtures/this/does/not/exist",
+			SubjectEmail: testSubjectEmail,
+		},
+		{ // Unusable CAIntermediatesPath
+			CARootsPath:         testCARootsPath,
+			CAIntermediatesPath: "fixtures/this/does/not/exist",
+			SubjectEmail:        testSubjectEmail,
+		},
+		{ // Invalid CARootsData
+			CARootsData:  []byte("invalid"),
+			SubjectEmail: testSubjectEmail,
+		},
+		{ // Invalid CAIntermediatesData
+			CARootsData:         testCARootsData,
+			CAIntermediatesData: []byte("invalid"),
+			SubjectEmail:        testSubjectEmail,
+		},
+		{ // Neither SubjectEmail nor SubjectHostname specified
+			CARootsPath:         testCARootsPath,
+			CAIntermediatesPath: testCAIntermediatesPath,
+		},
+	} {
+		_, err := pki.prepareTrustRoot()
+		assert.Error(t, err)
+	}
+}
+
 func TestPRSigstoreSignedPrepareTrustRoot(t *testing.T) {
 	const testKeyPath = "fixtures/cosign.pub"
+	const testKeyPath2 = "fixtures/cosign2.pub"
 	testKeyData, err := os.ReadFile(testKeyPath)
+	require.NoError(t, err)
+	testKeyData2, err := os.ReadFile(testKeyPath2)
 	require.NoError(t, err)
 	testFulcio, err := NewPRSigstoreSignedFulcio(
 		PRSigstoreSignedFulcioWithCAPath("fixtures/fulcio_v1.crt.pem"),
@@ -100,27 +243,35 @@ func TestPRSigstoreSignedPrepareTrustRoot(t *testing.T) {
 	const testRekorPublicKeyPath = "fixtures/rekor.pub"
 	testRekorPublicKeyData, err := os.ReadFile(testRekorPublicKeyPath)
 	require.NoError(t, err)
+	testPKI, err := NewPRSigstoreSignedPKI(
+		PRSigstoreSignedPKIWithCARootsPath("fixtures/pki_root_crts.pem"),
+		PRSigstoreSignedPKIWithCAIntermediatesPath("fixtures/pki_intermediate_crts.pem"),
+		PRSigstoreSignedPKIWithSubjectEmail("qiwan@redhat.com"),
+		PRSigstoreSignedPKIWithSubjectHostname("myhost.example.com"),
+	)
+	require.NoError(t, err)
 	testIdentity := newPRMMatchRepoDigestOrExact()
 	testIdentityOption := PRSigstoreSignedWithSignedIdentity(testIdentity)
 
 	// Success with public key
-	for _, c := range [][]PRSigstoreSignedOption{
-		{
-			PRSigstoreSignedWithKeyPath(testKeyPath),
-			testIdentityOption,
-		},
-		{
-			PRSigstoreSignedWithKeyData(testKeyData),
-			testIdentityOption,
-		},
+	for _, c := range []struct {
+		option  PRSigstoreSignedOption
+		numKeys int
+	}{
+		{PRSigstoreSignedWithKeyPath(testKeyPath), 1},
+		{PRSigstoreSignedWithKeyPaths([]string{testKeyPath, testKeyPath2}), 2},
+		{PRSigstoreSignedWithKeyData(testKeyData), 1},
+		{PRSigstoreSignedWithKeyDatas([][]byte{testKeyData, testKeyData2}), 2},
 	} {
-		pr, err := newPRSigstoreSigned(c...)
+		pr, err := newPRSigstoreSigned(c.option, testIdentityOption)
 		require.NoError(t, err)
 		res, err := pr.prepareTrustRoot()
 		require.NoError(t, err)
-		assert.NotNil(t, res.publicKey)
+		assert.NotNil(t, res.publicKeys)
+		assert.Len(t, res.publicKeys, c.numKeys)
 		assert.Nil(t, res.fulcio)
-		assert.Nil(t, res.rekorPublicKey)
+		assert.Nil(t, res.rekorPublicKeys)
+		assert.Nil(t, res.pki)
 	}
 	// Success with Fulcio
 	pr, err := newPRSigstoreSigned(
@@ -131,30 +282,48 @@ func TestPRSigstoreSignedPrepareTrustRoot(t *testing.T) {
 	require.NoError(t, err)
 	res, err := pr.prepareTrustRoot()
 	require.NoError(t, err)
-	assert.Nil(t, res.publicKey)
+	assert.Nil(t, res.publicKeys)
 	assert.NotNil(t, res.fulcio)
-	assert.NotNil(t, res.rekorPublicKey)
+	assert.Nil(t, res.pki)
+	assert.Len(t, res.rekorPublicKeys, 1)
 	// Success with Rekor public key
-	for _, c := range [][]PRSigstoreSignedOption{
-		{
-			PRSigstoreSignedWithKeyData(testKeyData),
-			PRSigstoreSignedWithRekorPublicKeyPath(testRekorPublicKeyPath),
-			testIdentityOption,
-		},
-		{
-			PRSigstoreSignedWithKeyData(testKeyData),
-			PRSigstoreSignedWithRekorPublicKeyData(testRekorPublicKeyData),
-			testIdentityOption,
-		},
+	for _, keyOption := range []PRSigstoreSignedOption{
+		PRSigstoreSignedWithKeyData(testKeyData),
+		PRSigstoreSignedWithKeyPaths([]string{testKeyPath, testKeyPath2}),
+		PRSigstoreSignedWithKeyData(testKeyData),
+		PRSigstoreSignedWithKeyDatas([][]byte{testKeyData, testKeyData2}),
 	} {
-		pr, err := newPRSigstoreSigned(c...)
-		require.NoError(t, err)
-		res, err := pr.prepareTrustRoot()
-		require.NoError(t, err)
-		assert.NotNil(t, res.publicKey)
-		assert.Nil(t, res.fulcio)
-		assert.NotNil(t, res.rekorPublicKey)
+		for _, rekor := range []struct {
+			option  PRSigstoreSignedOption
+			numKeys int
+		}{
+			{PRSigstoreSignedWithRekorPublicKeyPath(testRekorPublicKeyPath), 1},
+			{PRSigstoreSignedWithRekorPublicKeyPaths([]string{testRekorPublicKeyPath, testKeyPath}), 2},
+			{PRSigstoreSignedWithRekorPublicKeyData(testRekorPublicKeyData), 1},
+			{PRSigstoreSignedWithRekorPublicKeyDatas([][]byte{testRekorPublicKeyData, testKeyData}), 2},
+		} {
+			pr, err := newPRSigstoreSigned(keyOption, rekor.option, testIdentityOption)
+			require.NoError(t, err)
+			res, err := pr.prepareTrustRoot()
+			require.NoError(t, err)
+			assert.NotNil(t, res.publicKeys)
+			assert.Nil(t, res.fulcio)
+			assert.Nil(t, res.pki)
+			assert.Len(t, res.rekorPublicKeys, rekor.numKeys)
+		}
 	}
+	// Success with PKI
+	pr, err = newPRSigstoreSigned(
+		PRSigstoreSignedWithPKI(testPKI),
+		testIdentityOption,
+	)
+	require.NoError(t, err)
+	res, err = pr.prepareTrustRoot()
+	require.NoError(t, err)
+	assert.Nil(t, res.publicKeys)
+	assert.Nil(t, res.fulcio)
+	assert.Nil(t, res.rekorPublicKeys)
+	assert.NotNil(t, res.pki)
 
 	// Failure
 	for _, pr := range []prSigstoreSigned{ // Use a prSigstoreSigned because these configurations should be rejected by NewPRSigstoreSigned.
@@ -171,8 +340,50 @@ func TestPRSigstoreSignedPrepareTrustRoot(t *testing.T) {
 			KeyPath:        "fixtures/this/does/not/exist",
 			SignedIdentity: testIdentity,
 		},
+		{ // Both KeyPath and KeyPaths specified
+			KeyPath:        testKeyPath,
+			KeyPaths:       []string{testKeyPath, testKeyPath2},
+			SignedIdentity: testIdentity,
+		},
+		{ // Empty KeyPaths
+			KeyPaths:       []string{},
+			SignedIdentity: testIdentity,
+		},
+		{ // Invalid KeyPaths element
+			KeyPaths:       []string{"fixtures/image.signature", testKeyPath2},
+			SignedIdentity: testIdentity,
+		},
+		{
+			KeyPaths:       []string{testKeyPath2, "fixtures/image.signature"},
+			SignedIdentity: testIdentity,
+		},
+		{ // Unusable KeyPaths element
+			KeyPaths:       []string{"fixtures/this/does/not/exist", testKeyPath2},
+			SignedIdentity: testIdentity,
+		},
+		{
+			KeyPaths:       []string{testKeyPath2, "fixtures/this/does/not/exist"},
+			SignedIdentity: testIdentity,
+		},
 		{ // Invalid public key data
 			KeyData:        []byte("this is invalid"),
+			SignedIdentity: testIdentity,
+		},
+		{ // Both KeyData and KeyDatas specified
+			KeyData:        testKeyData,
+			KeyDatas:       [][]byte{testKeyData, testKeyData2},
+			SignedIdentity: testIdentity,
+		},
+		{ // Empty KeyDatas
+			KeyDatas:       [][]byte{},
+			SignedIdentity: testIdentity,
+		},
+		{ // Invalid KeyDatas element
+			KeyDatas:       [][]byte{[]byte("this is invalid"), testKeyData2},
+			SignedIdentity: testIdentity,
+		},
+		{
+			KeyDatas:       [][]byte{testKeyData, []byte("this is invalid")},
 			SignedIdentity: testIdentity,
 		},
 		{ // Invalid Fulcio configuration
@@ -191,15 +402,61 @@ func TestPRSigstoreSignedPrepareTrustRoot(t *testing.T) {
 			RekorPublicKeyPath: "fixtures/image.signature",
 			SignedIdentity:     testIdentity,
 		},
+		{ // Both RekorPublicKeyPath and RekorPublicKeyPaths specified
+			KeyData:             testKeyData,
+			RekorPublicKeyPath:  testRekorPublicKeyPath,
+			RekorPublicKeyPaths: []string{testRekorPublicKeyPath, testKeyPath},
+			SignedIdentity:      testIdentity,
+		},
+		{ // Empty RekorPublicKeyPaths
+			KeyData:             testKeyData,
+			RekorPublicKeyPaths: []string{},
+			SignedIdentity:      testIdentity,
+		},
+		{ // Invalid RekorPublicKeyPaths
+			KeyData:             testKeyData,
+			RekorPublicKeyPaths: []string{"fixtures/image.signature", testRekorPublicKeyPath},
+			SignedIdentity:      testIdentity,
+		},
+		{ // Invalid RekorPublicKeyPaths
+			KeyData:             testKeyData,
+			RekorPublicKeyPaths: []string{testRekorPublicKeyPath, "fixtures/image.signature"},
+			SignedIdentity:      testIdentity,
+		},
 		{ // Invalid Rekor public key data
 			KeyData:            testKeyData,
 			RekorPublicKeyData: []byte("this is invalid"),
 			SignedIdentity:     testIdentity,
 		},
+		{ // Both RekorPublicKeyData and RekorPublicKeyDatas specified
+			KeyData:             testKeyData,
+			RekorPublicKeyData:  testRekorPublicKeyData,
+			RekorPublicKeyDatas: [][]byte{testRekorPublicKeyData, testKeyData},
+			SignedIdentity:      testIdentity,
+		},
+		{ // Empty RekorPublicKeyDatas
+			KeyData:             testKeyData,
+			RekorPublicKeyDatas: [][]byte{},
+			SignedIdentity:      testIdentity,
+		},
+		{ // Invalid RekorPublicKeyDatas
+			KeyData:             testKeyData,
+			RekorPublicKeyDatas: [][]byte{[]byte("this is invalid"), testRekorPublicKeyData},
+			SignedIdentity:      testIdentity,
+		},
+		{
+			KeyData:             testKeyData,
+			RekorPublicKeyDatas: [][]byte{testRekorPublicKeyData, []byte("this is invalid")},
+			SignedIdentity:      testIdentity,
+		},
 		{ // Rekor public key is not ECDSA
 			KeyData:            testKeyData,
 			RekorPublicKeyPath: "fixtures/some-rsa-key.pub",
 			SignedIdentity:     testIdentity,
+		},
+		{ // Invalid PKI configuration
+			PKI:            &prSigstoreSignedPKI{},
+			SignedIdentity: testIdentity,
 		},
 	} {
 		_, err = pr.prepareTrustRoot()
@@ -270,7 +527,11 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 	testKeyRekorImageSig := sigstoreSignatureFromFile(t, "fixtures/dir-img-cosign-key-rekor-valid/signature-1")
 	testFulcioRekorImage := dirImageMock(t, "fixtures/dir-img-cosign-fulcio-rekor-valid", "192.168.64.2:5000/cosign-signed/fulcio-rekor-1")
 	testFulcioRekorImageSig := sigstoreSignatureFromFile(t, "fixtures/dir-img-cosign-fulcio-rekor-valid/signature-1")
+	testPKIImage := dirImageMock(t, "fixtures/dir-img-cosign-pki-valid", "localhost:5000/test")
+	testPKIImageSig := sigstoreSignatureFromFile(t, "fixtures/dir-img-cosign-pki-valid/signature-1")
 	keyData, err := os.ReadFile("fixtures/cosign.pub")
+	require.NoError(t, err)
+	keyData2, err := os.ReadFile("fixtures/cosign2.pub")
 	require.NoError(t, err)
 
 	// prepareTrustRoot fails
@@ -294,7 +555,7 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 		signature.SigstoreFromComponents(testKeyImageSig.UntrustedMIMEType(), testKeyImageSig.UntrustedPayload(), nil))
 	assertRejected(sar, err)
 
-	// Neither a public key nor Fulcio is specified
+	// None of the public key, Fulcio, or PKI is specified
 	pr = &prSigstoreSigned{
 		SignedIdentity: prm,
 	}
@@ -318,17 +579,62 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 	sar, err = pr.isSignatureAccepted(context.Background(), nil, testKeyImageSig)
 	assertRejected(sar, err)
 
+	// Both Fulcio and PKI is specified
+	pki, err := NewPRSigstoreSignedPKI(
+		PRSigstoreSignedPKIWithCARootsPath("fixtures/pki_root_crts.pem"),
+		PRSigstoreSignedPKIWithCAIntermediatesPath("fixtures/pki_intermediate_crts.pem"),
+		PRSigstoreSignedPKIWithSubjectEmail("qiwan@redhat.com"),
+	)
+	require.NoError(t, err)
+	pr = &prSigstoreSigned{
+		Fulcio:         fulcio,
+		PKI:            pki,
+		SignedIdentity: prm,
+	}
+	// Pass a nil pointer to, kind of, test that the return value does not depend on the image.
+	sar, err = pr.isSignatureAccepted(context.Background(), nil, testKeyImageSig)
+	assertRejected(sar, err)
+
+	// Both PKI and Rekor public key is specified
+	pr = &prSigstoreSigned{
+		PKI:                pki,
+		RekorPublicKeyPath: "fixtures/rekor.pub",
+		SignedIdentity:     prm,
+	}
+	// Pass a nil pointer to, kind of, test that the return value does not depend on the image.
+	sar, err = pr.isSignatureAccepted(context.Background(), nil, testKeyImageSig)
+	assertRejected(sar, err)
+
 	// Successful key+Rekor use
+	for _, keyPaths := range [][]string{
+		{"fixtures/cosign2.pub"},
+		{"fixtures/cosign2.pub", "fixtures/cosign.pub"},
+		{"fixtures/cosign.pub", "fixtures/cosign2.pub"},
+	} {
+		for _, rekorKeyPaths := range [][]string{
+			{"fixtures/rekor.pub"},
+			{"fixtures/rekor.pub", "fixtures/cosign.pub"},
+			{"fixtures/cosign.pub", "fixtures/rekor.pub"},
+		} {
+			pr, err := newPRSigstoreSigned(
+				PRSigstoreSignedWithKeyPaths(keyPaths),
+				PRSigstoreSignedWithRekorPublicKeyPaths(rekorKeyPaths),
+				PRSigstoreSignedWithSignedIdentity(prm),
+			)
+			require.NoError(t, err)
+			sar, err := pr.isSignatureAccepted(context.Background(), testKeyRekorImage, testKeyRekorImageSig)
+			require.NoError(t, err)
+			assertAccepted(sar, err)
+		}
+	}
+
+	// key+Rekor, missing Rekor SET annotation
 	pr, err = newPRSigstoreSigned(
 		PRSigstoreSignedWithKeyPath("fixtures/cosign2.pub"),
 		PRSigstoreSignedWithRekorPublicKeyPath("fixtures/rekor.pub"),
 		PRSigstoreSignedWithSignedIdentity(prm),
 	)
 	require.NoError(t, err)
-	sar, err = pr.isSignatureAccepted(context.Background(), testKeyRekorImage, testKeyRekorImageSig)
-	assertAccepted(sar, err)
-
-	// key+Rekor, missing Rekor SET annotation
 	sar, err = pr.isSignatureAccepted(context.Background(), nil,
 		sigstoreSignatureWithoutAnnotation(t, testKeyRekorImageSig, signature.SigstoreSETAnnotationKey))
 	assertRejected(sar, err)
@@ -339,15 +645,36 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 		sigstoreSignatureWithModifiedAnnotation(testKeyRekorImageSig, signature.SigstoreSETAnnotationKey,
 			"this is not a valid SET"))
 	assertRejected(sar, err)
-	// Fulcio: A Rekor SET which we don’t accept (one of many reasons)
-	pr2, err := newPRSigstoreSigned(
-		PRSigstoreSignedWithKeyPath("fixtures/cosign2.pub"),
-		PRSigstoreSignedWithRekorPublicKeyPath("fixtures/cosign.pub"), // not rekor.pub = a key mismatch
+	// key+Rekor: A Rekor SET which we don’t accept (one of many reasons)
+	for _, keyPaths := range [][]string{
+		{"fixtures/cosign2.pub"},
+		{"fixtures/cosign2.pub", "fixtures/cosign.pub"},
+		{"fixtures/cosign.pub", "fixtures/cosign2.pub"},
+	} {
+		pr, err := newPRSigstoreSigned(
+			PRSigstoreSignedWithKeyPaths(keyPaths),
+			PRSigstoreSignedWithRekorPublicKeyPath("fixtures/cosign.pub"), // not rekor.pub = a key mismatch
+			PRSigstoreSignedWithSignedIdentity(prm),
+		)
+		require.NoError(t, err)
+		// Pass a nil pointer to, kind of, test that the return value does not depend on the image.
+		sar, err = pr.isSignatureAccepted(context.Background(), nil, testKeyRekorImageSig)
+		assertRejected(sar, err)
+	}
+	// key+Rekor: A valid Rekor SET for one accepted key, but a signature with a _different_ accepted key
+	pr, err = newPRSigstoreSigned(
+		PRSigstoreSignedWithKeyPaths([]string{"fixtures/cosign.pub", "fixtures/cosign2.pub"}),
+		PRSigstoreSignedWithRekorPublicKeyPath("fixtures/rekor.pub"),
 		PRSigstoreSignedWithSignedIdentity(prm),
 	)
 	require.NoError(t, err)
 	// Pass a nil pointer to, kind of, test that the return value does not depend on the image.
-	sar, err = pr2.isSignatureAccepted(context.Background(), nil, testKeyRekorImageSig)
+	// testKeyImageSig is signed by cosign.pub; the SET contains cosign2.pub.
+	// The SET includes the signature contents… so this actually fails on "signature in Rekor SET does not match"
+	// rather than accepting the SET and later failing to validate payload; we’d need a way to generate the same signature
+	// using two different private keys.
+	sar, err = pr.isSignatureAccepted(context.Background(), nil, sigstoreSignatureWithModifiedAnnotation(testKeyImageSig,
+		signature.SigstoreSETAnnotationKey, testKeyRekorImageSig.UntrustedAnnotations()[signature.SigstoreSETAnnotationKey]))
 	assertRejected(sar, err)
 
 	// Successful Fulcio certificate use
@@ -357,18 +684,24 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 		PRSigstoreSignedFulcioWithSubjectEmail("mitr@redhat.com"),
 	)
 	require.NoError(t, err)
-	pr, err = newPRSigstoreSigned(
-		PRSigstoreSignedWithFulcio(fulcio),
-		PRSigstoreSignedWithRekorPublicKeyPath("fixtures/rekor.pub"),
-		PRSigstoreSignedWithSignedIdentity(prm),
-	)
-	require.NoError(t, err)
-	sar, err = pr.isSignatureAccepted(context.Background(), testFulcioRekorImage,
-		testFulcioRekorImageSig)
-	assertAccepted(sar, err)
+	for _, rekorKeyPaths := range [][]string{
+		{"fixtures/rekor.pub"},
+		{"fixtures/rekor.pub", "fixtures/cosign.pub"},
+		{"fixtures/cosign.pub", "fixtures/rekor.pub"},
+	} {
+		pr, err = newPRSigstoreSigned(
+			PRSigstoreSignedWithFulcio(fulcio),
+			PRSigstoreSignedWithRekorPublicKeyPaths(rekorKeyPaths),
+			PRSigstoreSignedWithSignedIdentity(prm),
+		)
+		require.NoError(t, err)
+		sar, err = pr.isSignatureAccepted(context.Background(), testFulcioRekorImage,
+			testFulcioRekorImageSig)
+		assertAccepted(sar, err)
+	}
 
 	// Fulcio, no Rekor requirement
-	pr2 = &prSigstoreSigned{
+	pr2 := &prSigstoreSigned{
 		Fulcio:         fulcio,
 		SignedIdentity: prm,
 	}
@@ -393,7 +726,7 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 		sigstoreSignatureWithoutAnnotation(t, testFulcioRekorImageSig, signature.SigstoreIntermediateCertificateChainAnnotationKey))
 	assertRejected(sar, err)
 	// … but a signature without the intermediate annotation is fine if the issuer is directly trusted
-	// (which we handle by trusing the intermediates)
+	// (which we handle by trusting the intermediates)
 	fulcio2, err := NewPRSigstoreSignedFulcio(
 		PRSigstoreSignedFulcioWithCAData([]byte(testFulcioRekorImageSig.UntrustedAnnotations()[signature.SigstoreIntermediateCertificateChainAnnotationKey])),
 		PRSigstoreSignedFulcioWithOIDCIssuer("https://github.com/login/oauth"),
@@ -449,22 +782,63 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 	sar, err = pr2.isSignatureAccepted(context.Background(), nil, testFulcioRekorImageSig)
 	assertRejected(sar, err)
 
-	// Successful validation, with KeyData and KeyPath
+	// Successful PKI certificate use
+	pki, err = NewPRSigstoreSignedPKI(
+		PRSigstoreSignedPKIWithCARootsPath("fixtures/pki_root_crts.pem"),
+		PRSigstoreSignedPKIWithCAIntermediatesPath("fixtures/pki_intermediate_crts.pem"),
+		PRSigstoreSignedPKIWithSubjectEmail("qiwan@redhat.com"),
+		PRSigstoreSignedPKIWithSubjectHostname("myhost.example.com"),
+	)
+	require.NoError(t, err)
 	pr, err = newPRSigstoreSigned(
-		PRSigstoreSignedWithKeyPath("fixtures/cosign.pub"),
+		PRSigstoreSignedWithPKI(pki),
 		PRSigstoreSignedWithSignedIdentity(prm),
 	)
 	require.NoError(t, err)
-	sar, err = pr.isSignatureAccepted(context.Background(), testKeyImage, testKeyImageSig)
+	sar, err = pr.isSignatureAccepted(context.Background(), testPKIImage, testPKIImageSig)
+	assertAccepted(sar, err)
+	// PKI, missing certificate annotation causes the Cosign-issued signature to be rejected
+	sar, err = pr.isSignatureAccepted(context.Background(), nil,
+		sigstoreSignatureWithoutAnnotation(t, testPKIImageSig, signature.SigstoreCertificateAnnotationKey))
+	assertRejected(sar, err)
+	// PKI, missing certificate chain annotation is fine if the issuer is directly trusted
+	sar, err = pr.isSignatureAccepted(context.Background(), testPKIImage,
+		sigstoreSignatureWithoutAnnotation(t, testPKIImageSig, signature.SigstoreIntermediateCertificateChainAnnotationKey))
 	assertAccepted(sar, err)
 
-	pr, err = newPRSigstoreSigned(
-		PRSigstoreSignedWithKeyData(keyData),
+	// PKI, missing certificate chain annotation causes the Cosign-issued signature to be rejected
+	pki2, err := NewPRSigstoreSignedPKI(
+		PRSigstoreSignedPKIWithCARootsPath("fixtures/pki_root_crts.pem"),
+		PRSigstoreSignedPKIWithSubjectEmail("qiwan@redhat.com"),
+		PRSigstoreSignedPKIWithSubjectHostname("myhost.example.com"),
+	)
+	require.NoError(t, err)
+	pr2, err = newPRSigstoreSigned(
+		PRSigstoreSignedWithPKI(pki2),
 		PRSigstoreSignedWithSignedIdentity(prm),
 	)
 	require.NoError(t, err)
-	sar, err = pr.isSignatureAccepted(context.Background(), testKeyImage, testKeyImageSig)
-	assertAccepted(sar, err)
+	sar, err = pr2.isSignatureAccepted(context.Background(), nil,
+		sigstoreSignatureWithoutAnnotation(t, testPKIImageSig, signature.SigstoreIntermediateCertificateChainAnnotationKey))
+	assertRejected(sar, err)
+
+	// Successful validation, with KeyPath/KeyPaths/KeyData/KeyDatas
+	for _, opt := range []PRSigstoreSignedOption{
+		PRSigstoreSignedWithKeyPath("fixtures/cosign.pub"),
+		PRSigstoreSignedWithKeyPaths([]string{"fixtures/cosign.pub", "fixtures/cosign2.pub"}),
+		PRSigstoreSignedWithKeyPaths([]string{"fixtures/cosign2.pub", "fixtures/cosign.pub"}),
+		PRSigstoreSignedWithKeyData(keyData),
+		PRSigstoreSignedWithKeyDatas([][]byte{keyData, keyData2}),
+		PRSigstoreSignedWithKeyDatas([][]byte{keyData2, keyData}),
+	} {
+		pr, err := newPRSigstoreSigned(
+			opt,
+			PRSigstoreSignedWithSignedIdentity(prm),
+		)
+		require.NoError(t, err)
+		sar, err = pr.isSignatureAccepted(context.Background(), testKeyImage, testKeyImageSig)
+		assertAccepted(sar, err)
+	}
 
 	// A signature which does not verify
 	pr, err = newPRSigstoreSigned(
@@ -490,7 +864,7 @@ func TestPRrSigstoreSignedIsSignatureAccepted(t *testing.T) {
 	assertRejected(sar, err)
 
 	// A valid signature with a rejected identity.
-	nonmatchingPRM, err := NewPRMExactReference("this/doesnt:match")
+	nonmatchingPRM, err := NewPRMExactReference("this/does-not:match")
 	require.NoError(t, err)
 	pr, err = newPRSigstoreSigned(
 		PRSigstoreSignedWithKeyPath("fixtures/cosign.pub"),
@@ -644,7 +1018,7 @@ func TestPRSigstoreSignedIsRunningImageAllowed(t *testing.T) {
 	assertRunningAllowed(t, allowed, err)
 
 	// 2 invalid signajtures: use dir-img-cosign-valid-2, but a non-matching Docker reference
-	image = dirImageMock(t, "fixtures/dir-img-cosign-valid-2", "this/doesnt:match")
+	image = dirImageMock(t, "fixtures/dir-img-cosign-valid-2", "this/does-not:match")
 	pr, err = NewPRSigstoreSigned(
 		PRSigstoreSignedWithKeyPath("fixtures/cosign.pub"),
 		PRSigstoreSignedWithSignedIdentity(prm),
