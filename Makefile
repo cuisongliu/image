@@ -15,6 +15,7 @@ BUILDFLAGS := -tags "$(BUILDTAGS)"
 
 # Extra flags passed to go test
 TESTFLAGS :=
+TEST_PACKAGES := ./...
 
 PACKAGES := $(shell go list $(BUILDFLAGS) ./...)
 SOURCE_DIRS = $(shell echo $(PACKAGES) | awk 'BEGIN{FS="/"; RS=" "}{print $$4}' | uniq)
@@ -35,7 +36,7 @@ REGISTRIESDDIR ?= ${CONTAINERSCONFDIR}/registries.d
 # N/B: This value is managed by Renovate, manual changes are
 # possible, as long as they don't disturb the formatting
 # (i.e. DO NOT ADD A 'v' prefix!)
-GOLANGCI_LINT_VERSION := 2.1.6
+GOLANGCI_LINT_VERSION := 2.2.1
 
 export PATH := $(PATH):${GOBIN}
 
@@ -89,7 +90,7 @@ clean:
 
 .PHONY: test
 test:
-	@go test $(BUILDFLAGS) $(TESTFLAGS) -cover ./...
+	@go test $(BUILDFLAGS) $(TESTFLAGS) -cover $(TEST_PACKAGES)
 
 .PHONY: fmt
 fmt:
